@@ -1,0 +1,492 @@
+---
+alwaysApply: true
+---
+# Datart 代码风格规范
+
+## 概述
+
+本文档定义了Datart项目中Java代码的编写规范和风格要求，旨在确保代码的一致性、可读性和可维护性。所有开发人员都应遵循这些规范。
+
+## 项目架构分析
+
+### 1. 整体架构
+Datart项目采用经典的分层架构模式：
+- **Controller层**：处理HTTP请求，参数校验，调用Service层
+- **Service层**：业务逻辑处理，事务管理
+- **Mapper层**：数据访问层，MyBatis映射
+- **Entity层**：数据实体类
+- **DTO层**：数据传输对象
+
+### 2. 核心基类
+- **BaseController**：所有Controller的基类，提供用户认证、参数校验等功能
+- **BaseService**：所有Service的基类，提供用户信息、权限检查等功能
+- **BaseEntity**：所有实体的基类，提供通用字段
+
+### 3. 代码风格特点
+- **版权声明**：大部分文件包含Apache License 2.0版权声明
+- **依赖注入**：主要使用构造函数注入，少量使用字段注入
+- **异常处理**：使用项目统一的异常处理机制
+- **参数校验**：在Controller层进行参数校验
+
+## 1. Service接口规范
+
+### 1.1 基本要求
+- **版权声明**：不添加版权声明，保持简洁
+- **注释风格**：不使用JavaDoc注释，保持接口简洁
+- **方法声明**：每个方法独立一行，使用简洁的声明方式
+- **空行分隔**：方法之间使用空行分隔，提高可读性
+- **包结构**：位于`datart.server.service`包下
+
+### 1.2 标准格式
+```java
+package datart.server.service;
+
+import datart.server.base.dto.ReportFavoriteDetail;
+
+import java.util.List;
+
+public interface ReportFavoriteService {
+
+    ReportFavoriteDetail addFavorite(String resourceType, String resourceId);
+
+    boolean removeFavorite(String resourceType, String resourceId);
+
+    List<ReportFavoriteDetail> getUserFavorites();
+
+    boolean isFavorited(String resourceType, String resourceId);
+
+}
+```
+
+### 1.3 命名规范
+- 接口名使用名词，以`Service`结尾
+- 方法名使用动词，采用驼峰命名法
+- 参数名使用有意义的名称，避免缩写
+
+### 1.4 代码注释规范
+- 请不要使用行尾注释
+
+## 2. ServiceImpl实现类规范
+
+### 2.1 基本要求
+- **版权声明**：大部分文件包含Apache License 2.0版权声明，新文件可选择不添加
+- **导入语句**：按功能分组，保持清晰的导入结构
+- **注解使用**：使用@Slf4j、@Service、@Transactional等标准注解
+- **继承关系**：继承BaseService，获得基础功能支持
+- **依赖注入**：主要使用构造函数注入，少量使用字段注入（如BaseService中的@Autowired）
+- **常量定义**：在类顶部定义常量，使用private static final
+- **异常处理**：避免过度异常处理，只在关键业务逻辑失败时使用
+- **参数校验**：不在Service层进行详细参数校验，交给Controller层处理
+- **包结构**：位于`datart.server.service.impl`包下
+
+### 2.2 标准格式
+```java
+package datart.server.service.impl;
+
+import datart.core.base.exception.Exceptions;
+import datart.core.base.exception.ParamException;
+import datart.core.entity.Dashboard;
+import datart.core.entity.ReportFavorite;
+import datart.core.entity.Organization;
+import datart.core.mappers.DashboardMapper;
+import datart.core.mappers.ext.ReportFavoriteMapperExt;
+import datart.server.base.dto.ReportFavoriteDetail;
+import datart.server.service.OrgService;
+import datart.server.service.ReportFavoriteService;
+import datart.server.service.BaseService;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.BeanUtils;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
+
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Slf4j
+@Service
+public class ReportFavoriteServiceImpl extends BaseService implements ReportFavoriteService {
+
+    private static final String RESOURCE_TYPE_DASHBOARD = "DASHBOARD";
+    private static final String RESOURCE_TYPE_USERDEFINED = "USERDEFINED";
+
+    private final ReportFavoriteMapperExt reportFavoriteMapper;
+    private final DashboardMapper dashboardMapper;
+    private final OrgService orgService;
+
+    public ReportFavoriteServiceImpl(ReportFavoriteMapperExt reportFavoriteMapper,
+                                   DashboardMapper dashboardMapper,
+                                   OrgService orgService) {
+        this.reportFavoriteMapper = reportFavoriteMapper;
+        this.dashboardMapper = dashboardMapper;
+        this.orgService = orgService;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ReportFavoriteDetail addFavorite(String resourceType, String resourceId) {
+        String userId = getCurrentUser().getId();
+        Organization organization = orgService.checkTeamOrg();
+        String orgId = organization != null ? organization.getId() : null;
+
+        ReportFavorite existingFavorite = reportFavoriteMapper.selectByUserAndResource(userId, resourceType, resourceId);
+        if (existingFavorite != null) {
+            Exceptions.tr(ParamException.class, "该资源已经收藏过了");
+        }
+
+        String resourceName = getResourceName(resourceType, resourceId);
+        if (StringUtils.isBlank(resourceName)) {
+            Exceptions.tr(ParamException.class, "资源不存在");
+        }
+
+        ReportFavorite favorite = new ReportFavorite();
+        favorite.setId(UUID.randomUUID().toString().replace("-", ""));
+        favorite.setUserId(userId);
+        favorite.setOrgId(orgId);
+        favorite.setResourceType(resourceType);
+        favorite.setResourceId(resourceId);
+        favorite.setResourceName(resourceName);
+        favorite.setCreateBy(userId);
+        favorite.setUpdateBy(userId);
+        favorite.setStatus((byte) 1);
+
+        reportFavoriteMapper.insertSelective(favorite);
+
+        return convertToDTO(favorite);
+    }
+
+}
+```
+
+### 2.3 关键特点
+- **构造函数注入**：使用构造函数注入替代字段注入，提高代码可测试性
+- **final字段**：所有依赖字段使用final修饰，确保不可变性
+- **常量定义**：在类顶部定义常量，使用private static final
+- **异常处理简化**：避免过度异常处理，只在关键业务逻辑失败时使用
+- **参数校验分离**：不在Service层进行详细参数校验，交给Controller层处理
+
+## 3. Controller规范
+
+### 3.1 基本要求
+- **版权声明**：大部分文件包含Apache License 2.0版权声明，新文件可选择不添加
+- **继承关系**：继承BaseController，获得参数校验和异常处理能力
+- **依赖注入**：使用构造函数注入，提高代码可测试性
+- **注解使用**：使用@Api、@Slf4j、@RestController等标准注解
+- **异常处理**：使用BaseController的checkBlank方法进行参数校验
+- **API描述**：使用英文描述，与项目其他Controller保持一致
+- **请求映射**：使用简洁的路径，如`/report-favorites`
+- **参数校验**：在Controller层进行参数校验，使用checkBlank方法
+- **包结构**：位于`datart.server.controller`包下
+
+### 3.2 标准格式
+```java
+package datart.server.controller;
+
+import datart.server.base.dto.ReportFavoriteDetail;
+import datart.server.base.dto.ResponseData;
+import datart.server.base.params.ReportFavoriteParam;
+import datart.server.service.ReportFavoriteService;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import io.swagger.annotations.ApiParam;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@Api
+@Slf4j
+@RestController
+@RequestMapping(value = "/report-favorites")
+public class ReportFavoriteController extends BaseController {
+
+    private final ReportFavoriteService reportFavoriteService;
+
+    public ReportFavoriteController(ReportFavoriteService reportFavoriteService) {
+        this.reportFavoriteService = reportFavoriteService;
+    }
+
+    @ApiOperation(value = "add favorite")
+    @PostMapping("/add")
+    public ResponseData<ReportFavoriteDetail> addFavorite(@Validated @RequestBody ReportFavoriteParam param) {
+        checkBlank(param.getResourceType(), "resourceType");
+        checkBlank(param.getResourceId(), "resourceId");
+        return ResponseData.success(reportFavoriteService.addFavorite(param.getResourceType(), param.getResourceId()));
+    }
+
+    @ApiOperation(value = "remove favorite")
+    @PostMapping("/remove")
+    public ResponseData<Boolean> removeFavorite(@Validated @RequestBody ReportFavoriteParam param) {
+        checkBlank(param.getResourceType(), "resourceType");
+        checkBlank(param.getResourceId(), "resourceId");
+        return ResponseData.success(reportFavoriteService.removeFavorite(param.getResourceType(), param.getResourceId()));
+    }
+
+    @ApiOperation(value = "get user favorites")
+    @GetMapping("/list")
+    public ResponseData<List<ReportFavoriteDetail>> getUserFavorites() {
+        return ResponseData.success(reportFavoriteService.getUserFavorites());
+    }
+
+    @ApiOperation(value = "check favorite status")
+    @GetMapping("/check")
+    public ResponseData<Boolean> checkFavoriteStatus(
+            @ApiParam(value = "resource type", required = true) @RequestParam String resourceType,
+            @ApiParam(value = "resource id", required = true) @RequestParam String resourceId) {
+        checkBlank(resourceType, "resourceType");
+        checkBlank(resourceId, "resourceId");
+        return ResponseData.success(reportFavoriteService.isFavorited(resourceType, resourceId));
+    }
+
+}
+```
+
+### 3.3 关键特点
+- **继承BaseController**：获得参数校验和异常处理能力
+- **构造函数注入**：使用构造函数注入，提高代码可测试性
+- **参数校验集中**：在Controller层使用checkBlank方法进行参数校验
+- **API描述英文**：使用英文描述，与项目其他Controller保持一致
+- **请求映射简洁**：使用简洁的路径，如`/report-favorites`
+
+## 4. MapperExt扩展接口规范
+
+### 4.1 基本要求
+- **版权声明**：大部分文件包含Apache License 2.0版权声明，新文件可选择不添加
+- **继承关系**：继承对应的Mapper接口
+- **注解使用**：使用@Mapper注解
+- **SQL格式**：使用多行字符串格式，提高可读性
+- **参数使用**：项目中使用@Param注解和不使用@Param注解的情况都存在，建议保持一致
+- **方法命名**：使用描述性的方法名
+- **包结构**：位于`datart.core.mappers.ext`包下
+
+### 4.2 标准格式
+```java
+package datart.core.mappers.ext;
+
+import datart.core.entity.ReportFavorite;
+import datart.core.mappers.ReportFavoriteMapper;
+import org.apache.ibatis.annotations.*;
+
+import java.util.List;
+
+@Mapper
+public interface ReportFavoriteMapperExt extends ReportFavoriteMapper {
+
+    @Select({
+            "SELECT ",
+            "	id, user_id, org_id, resource_type, resource_id, resource_name, create_time, ",
+            "	update_time, create_by, update_by, `status` ",
+            "FROM ",
+            "	report_favorite ",
+            "WHERE ",
+            "	user_id = #{userId,jdbcType=VARCHAR} ",
+            "	AND org_id = #{orgId,jdbcType=VARCHAR} ",
+            "	AND `status` = 1 ",
+            "ORDER BY create_time DESC"
+    })
+    List<ReportFavorite> selectByUserId(String userId, String orgId);
+
+    @Select({
+            "SELECT ",
+            "	id, user_id, org_id, resource_type, resource_id, resource_name, create_time, ",
+            "	update_time, create_by, update_by, `status` ",
+            "FROM ",
+            "	report_favorite ",
+            "WHERE ",
+            "	user_id = #{userId,jdbcType=VARCHAR} ",
+            "	AND resource_type = #{resourceType,jdbcType=VARCHAR} ",
+            "	AND resource_id = #{resourceId,jdbcType=VARCHAR} ",
+            "	AND `status` = 1 ",
+            "LIMIT 1"
+    })
+    ReportFavorite selectByUserAndResource(String userId, String resourceType, String resourceId);
+
+    @Delete({
+            "DELETE FROM report_favorite ",
+            "WHERE ",
+            "	user_id = #{userId,jdbcType=VARCHAR} ",
+            "	AND resource_type = #{resourceType,jdbcType=VARCHAR} ",
+            "	AND resource_id = #{resourceId,jdbcType=VARCHAR}"
+    })
+    int deleteByUserAndResource(String userId, String resourceType, String resourceId);
+
+}
+```
+
+### 4.3 关键特点
+- **SQL格式化**：使用多行字符串，每行一个SQL片段
+- **参数类型**：明确指定jdbcType，如VARCHAR、TIMESTAMP等
+- **方法命名**：使用selectBy、deleteBy等前缀
+- **参数注解**：项目中使用@Param注解和不使用@Param注解的情况都存在，建议保持一致
+- **SQL风格**：使用制表符缩进，保持SQL格式的一致性
+
+## 5. DTO数据传输对象规范
+
+### 5.1 基本要求
+- **版权声明**：大部分文件包含Apache License 2.0版权声明，新文件可选择不添加
+- **注解使用**：使用@Data注解，自动生成getter/setter
+- **字段注释**：使用简单的字段注释，不使用JavaDoc
+- **字段类型**：使用合适的Java类型，如Date、String等
+- **包结构**：位于`datart.server.base.dto`包下
+
+### 5.2 标准格式
+```java
+package datart.server.base.dto;
+
+import lombok.Data;
+
+import java.util.Date;
+
+@Data
+public class ReportFavoriteDetail {
+    
+    private String id;
+    
+    private String userId;
+    
+    private String orgId;
+    
+    private String resourceType;
+    
+    private String resourceId;
+    
+    private String resourceName;
+    
+    private Date createTime;
+    
+    private Date updateTime;
+    
+    private String createBy;
+    
+    private String updateBy;
+    
+    private Byte status;
+    
+    private String thumbnail;
+    
+    private String description;
+    
+}
+```
+
+## 6. 项目实际模式分析
+
+### 6.1 版权声明模式
+通过分析项目代码，发现以下版权声明模式：
+- **大部分文件**：包含完整的Apache License 2.0版权声明
+- **新文件**：可以选择不添加版权声明，保持简洁
+- **版权声明格式**：使用标准的Apache License 2.0格式
+
+### 6.2 依赖注入模式
+项目中的依赖注入使用情况：
+- **构造函数注入**：主要使用方式，提高代码可测试性
+- **字段注入**：少量使用，主要在BaseService等基类中
+- **注入字段**：使用`private final`修饰符，确保不可变性
+
+### 6.3 异常处理模式
+项目中的异常处理特点：
+- **统一异常处理**：使用`Exceptions.tr()`方法
+- **异常类型**：主要使用`ParamException`、`BaseException`等
+- **异常频率**：避免过度异常处理，只在关键业务逻辑失败时使用
+
+### 6.4 参数校验模式
+项目中的参数校验策略：
+- **Controller层**：使用`checkBlank()`方法进行参数校验
+- **Service层**：不进行详细参数校验，专注于业务逻辑
+- **校验方法**：继承自BaseController的校验方法
+
+### 6.5 MapperExt参数注解模式
+通过分析项目中的MapperExt文件，发现：
+- **@Param注解使用**：项目中存在两种模式
+  - 使用@Param注解：如`UserMapperExt`、`OrganizationMapperExt`
+  - 不使用@Param注解：如`ReportFavoriteMapperExt`
+- **建议**：在同一个项目中保持一致，建议使用@Param注解以提高可读性
+
+## 7. 通用规范
+
+### 7.1 代码格式
+- **缩进**：使用制表符缩进，保持视觉一致性
+- **空行**：类、方法之间使用空行分隔
+- **导入顺序**：按功能分组，保持清晰的导入结构
+- **命名规范**：使用驼峰命名法，保持命名的一致性
+- **注解位置**：注解放在类或方法的上方，保持格式统一
+
+### 7.2 导入语句分组
+```java
+// 1. 项目内部包
+import datart.core.entity.ReportFavorite;
+import datart.server.base.dto.ReportFavoriteDetail;
+
+// 2. 第三方库
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+// 3. Java标准库
+import java.util.List;
+import java.util.UUID;
+```
+
+### 7.3 异常处理策略
+- **分层处理**：Controller层负责参数校验，Service层负责业务逻辑异常
+- **关键异常保留**：只在重复收藏、资源不存在等关键业务逻辑失败时使用异常
+- **框架依赖**：依赖Spring框架和上层处理大部分异常情况
+- **符合项目规范**：与项目中其他ServiceImpl文件保持一致的异常处理频率
+
+### 7.4 代码组织特点
+- **导入分组**：按功能分组导入，保持清晰的导入结构
+- **方法简洁**：保持方法实现的简洁性，避免过度复杂化
+- **职责分离**：明确各层的职责，Controller负责参数校验，Service负责业务逻辑
+- **风格一致**：与项目中其他文件保持高度一致的代码风格
+
+## 8. 最佳实践
+
+### 8.1 依赖注入
+- 优先使用构造函数注入，避免字段注入
+- 使用final修饰符确保依赖的不可变性
+- 在构造函数中完成所有依赖的初始化
+
+### 8.2 异常处理
+- 避免过度异常处理，只在关键业务逻辑失败时使用
+- 使用项目统一的异常处理机制
+- 让框架处理大部分异常情况
+
+### 8.3 参数校验
+- 在Controller层进行参数校验
+- 使用BaseController的checkBlank方法
+- Service层专注于业务逻辑实现
+
+### 8.4 代码注释
+- 避免过度注释，代码应该自解释
+- 只在必要时添加注释
+- 使用简洁的注释风格
+
+### 8.5 版权声明
+- 新文件可以选择不添加版权声明，保持简洁
+- 如果需要添加，使用标准的Apache License 2.0格式
+- 与项目现有文件保持一致的版权声明策略
+
+## 9. 检查清单
+
+在提交代码前，请确保：
+
+- [ ] 遵循命名规范
+- [ ] 使用正确的注解
+- [ ] 导入语句按功能分组
+- [ ] 使用构造函数注入
+- [ ] 异常处理符合项目规范
+- [ ] 代码格式符合要求
+- [ ] 无编译错误
+- [ ] 无未使用的导入
+
+## 10. 工具推荐
+
+- **IDE配置**：使用统一的代码格式化配置
+- **代码检查**：使用SonarQube等工具进行代码质量检查
+- **格式化**：使用IDE的自动格式化功能
+- **导入优化**：使用IDE的导入优化功能
+
+---
+
+*本文档基于Datart项目的实际代码风格制定，旨在确保代码的一致性和可维护性。如有疑问，请参考项目中的现有代码实现。*
